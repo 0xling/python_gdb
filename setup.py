@@ -1,5 +1,7 @@
 __author__ = 'ling'
-from setuptools import setup, find_packages
+
+from distutils.core import setup
+from setuptools import find_packages
 
 setup(
       name="python_gdb",
@@ -8,6 +10,5 @@ setup(
       author="Ling",
       author_email='ling_pro@163.com',
       url="http://www.github.com/MatrixLing/python_gdb",
-      packages= find_packages(),
-      scripts=["scripts/test.py"],
-      )
+      packages=['.'],
+)
