@@ -5,12 +5,12 @@ from ctypes import *
 
 libc = cdll.LoadLibrary('libc.so.6')
 
-_fork = libc.fork
-_execl = libc.execl
+libc_fork = libc.fork
+libc_execl = libc.execl
 
-_ptrace = libc.ptrace
-_ptrace.restype = c_long
-_ptrace.argtypes = [c_int, c_int, c_long, c_long]
+libc_ptrace = libc.ptrace
+libc_ptrace.restype = c_long
+libc_ptrace.argtypes = [c_int, c_int, c_long, c_long]
 
-_errno = libc.errno
-_perror = libc.perror
+libc_errno = libc.errno
+libc_perror = libc.perror

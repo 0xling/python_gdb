@@ -11,7 +11,7 @@ from zio import *
 
 from defines import *
 from breakpoint import *
-from src.linux_struct import *
+from linux_struct import *
 from cpuinfo import *
 from libc import *
 
@@ -96,12 +96,12 @@ class pygdb:
 
     def load(self, path):
         self._log('path=%s' % path)
-        pid = _fork()
+        pid = libc_fork()
         if pid == 0:  # child process
             # Then this will give output in the correct order:
             # disable_stdout_buffering()
             self.ptrace(PTRACE_TRACEME, 0, 0, 0)
-            _execl(path, path, 0)
+            libc_execl(path, path, 0)
         else:  # parent
             self.pid = pid
             self._log('pid=%d' % pid)
@@ -355,7 +355,7 @@ class pygdb:
         self._log('ptrace command=%d' % command)
         peek_commands = [PTRACE_PEEKDATA, PTRACE_PEEKSIGINFO, PTRACE_PEEKTEXT, PTRACE_PEEKUSER]
         if command in peek_commands:
-            data = _ptrace(command, pid, arg1, arg2)
+            data = libc_ptrace(command, pid, arg1, arg2)
             '''
             if data == -1:
                 self._log('ptrace error1')
@@ -364,9 +364,9 @@ class pygdb:
             '''
             return data
 
-        if _ptrace(command, pid, arg1, arg2) == -1:
+        if libc_ptrace(command, pid, arg1, arg2) == -1:
             self._log('ptrace error2:%d' % command)
-            _perror()
+            libc_perror()
 
     def detach(self, signum=0):
         self._log('detach')
