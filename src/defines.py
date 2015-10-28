@@ -4,28 +4,6 @@ __author__ = 'ling'
 from ctypes import *
 
 
-class user_regs_struct(Structure):
-    _fields_ = [
-        ("ebx", c_uint),
-        ("ecx", c_uint),
-        ("edx", c_uint),
-        ("esi", c_uint),
-        ("edi", c_uint),
-        ("ebp", c_uint),
-        ("eax", c_uint),
-        ("xds", c_uint),
-        ("xes", c_uint),
-        ("xfs", c_uint),
-        ("xgs", c_uint),
-        ("orig_eax", c_uint),
-        ("eip", c_uint),
-        ("xcs", c_uint),
-        ("eflags", c_uint),
-        ("esp", c_uint),
-        ("xss", c_uint),
-    ]
-
-
 PTRACE_TRACEME = 0
 PTRACE_PEEKTEXT = 1
 PTRACE_PEEKDATA = 2
@@ -120,39 +98,4 @@ uid_t = c_ushort
 clock_t = c_uint
 
 
-class _sifields_sigfault_t(Union):
-    _fields_ = (
-        ("_addr", c_void_p),
-    )
 
-
-class _sifields_sigchld_t(Structure):
-    _fields_ = (
-        ("pid", pid_t),
-        ("uid", uid_t),
-        ("status", c_int),
-        ("utime", clock_t),
-        ("stime", clock_t),
-    )
-
-
-class _sifields_t(Union):
-    _fields_ = (
-        ("pad", c_char * (128 - 3 * sizeof(c_int))),
-        ("_sigchld", _sifields_sigchld_t),
-        ("_sigfault", _sifields_sigfault_t),
-        #        ("_kill", _sifields_kill_t),
-        #        ("_timer", _sifields_timer_t),
-        #        ("_rt", _sifields_rt_t),
-        #        ("_sigpoll", _sifields_sigpoll_t),
-    )
-
-
-class siginfo(Structure):
-    _fields_ = (
-        ("si_signo", c_int),
-        ("si_errno", c_int),
-        ("si_code", c_int),
-        ("_sifields", _sifields_t)
-    )
-    _anonymous_ = ("_sifields",)
