@@ -2,7 +2,7 @@ __author__ = 'ling'
 
 from ctypes import *
 
-from src.cpuinfo import *
+from cpuinfo import *
 
 
 # From /usr/include/asm-i386/user.h
