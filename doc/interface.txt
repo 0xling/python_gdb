@@ -1,0 +1,46 @@
+class pygdb:
+    load(self, target)
+    attach(self, pid)
+    detach(self, signum=0):
+    kill(self):
+
+    # 重定位输出到端口
+    redir_stdout(self, ip, port):
+
+    # 内存操作
+    read(self, address, length):
+    write(self, address, data, length=0):
+
+    # 寄存器操作
+    get_regs(self):
+    set_regs(self, regs):
+
+    # 断点操作
+    bp_del(self, address):
+    bp_del_all(self):
+    bp_set(self, address, description="", restore=True, handler=None):
+
+    # 设置信号处理模式
+    set_signal_handle_mode(self, signum, ignore=True):
+
+    # 设置信号处理函数
+    set_callback(self, signum, callback_func=None):
+
+    # 设置ptrace事件 处理函数
+    set_event_handle(self, event_code, handler=None):
+
+    # 设置开启单步调试
+    single_step(self, enable):
+
+    # 设置开启trace 系统调用
+    trace_sys_call(self, enable):
+
+    # 跟踪fork子进程
+    follow_fork(self, mode):
+
+    # 跟踪exec子进程
+    follow_exec(self, mode):
+
+    # 运行调试器
+    run(self):
+

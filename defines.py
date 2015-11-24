@@ -3,7 +3,6 @@ __author__ = 'ling'
 
 from ctypes import *
 
-
 PTRACE_TRACEME = 0
 PTRACE_PEEKTEXT = 1
 PTRACE_PEEKDATA = 2
@@ -50,7 +49,8 @@ PTRACE_EVENT_EXEC = 4
 PTRACE_EVENT_VFORK_DONE = 5
 PTRACE_EVENT_EXIT = 6
 
-#define self
+EVENTS = {1:'FORK', 2:'VFORK', 3:'CLONE', 4:'EXEC', 5:'VFORK_DONE', 6:'EXIT'}
+# define self
 PTRACE_EVENT_SINGLE_STEP = 7
 
 SIGHUP = 0x1
@@ -86,16 +86,13 @@ SIGSYS = 0x1f
 SIGRTMIN = 0x22
 SIGRTMAX = 0x40
 
-SIGNAMES = {1: 'SIGHUP', 2: 'SIGINT', 3: 'SIGQUIT', 4: 'SIGILL', 5: 'SIGTRAP', 6: 'SIGABRT', 7: 'SIGBUS', 8: 'SIGFPE', \
-            9: 'SIGKILL', 10: 'SIGUSR1', 11: 'SIGSEGV', 12: 'SIGUSR2', 13: 'SIGPIPE', 14: 'SIGALRM', 15: 'SIGTERM', \
-            17: 'SIGCHLD', 18: 'SIGCONT', 19: 'SIGSTOP', 20: 'SIGTSTP', 21: 'SIGTTIN', 22: 'SIGTTOU', 23: 'SIGURG', \
-            24: 'SIGXCPU', 25: 'SIGXFSZ', 26: 'SIGVTALRM', 27: 'SIGPROF', 28: 'SIGWINCH', 29: 'SIGPOLL', 30: 'SIGPWR', \
+SIGNAMES = {1: 'SIGHUP', 2: 'SIGINT', 3: 'SIGQUIT', 4: 'SIGILL', 5: 'SIGTRAP', 6: 'SIGABRT', 7: 'SIGBUS', 8: 'SIGFPE',
+            9: 'SIGKILL', 10: 'SIGUSR1', 11: 'SIGSEGV', 12: 'SIGUSR2', 13: 'SIGPIPE', 14: 'SIGALRM', 15: "SIGTERM",
+            17: 'SIGCHLD', 18: 'SIGCONT', 19: 'SIGSTOP', 20: 'SIGTSTP', 21: 'SIGTTIN', 22: 'SIGTTOU', 23: 'SIGURG',
+            24: 'SIGXCPU', 25: 'SIGXFSZ', 26: 'SIGVTALRM', 27: 'SIGPROF', 28: 'SIGWINCH', 29: 'SIGPOLL', 30: 'SIGPWR',
             31: 'SIGSYS'}
 
-#From /usr/include/asm-generic/siginfo.h
+# From /usr/include/asm-generic/siginfo.h
 pid_t = c_int
 uid_t = c_ushort
 clock_t = c_uint
-
-
-

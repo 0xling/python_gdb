@@ -7,7 +7,7 @@ from cpuinfo import *
 
 # From /usr/include/asm-i386/user.h
 class user_regs_struct(Structure):
-    '''
+    """
     if CPU_PPC32:
         _fields_ = (
             ("gpr0", c_ulong),
@@ -58,7 +58,7 @@ class user_regs_struct(Structure):
     elif CPU_ARM:
         _fields_ = tuple(("r%i" % reg, c_ulong) for reg in range(18))
     elif CPU_64BITS:
-    '''
+    """
     if CPU_64BITS:
         _fields_ = (
             ("r15", c_ulong),

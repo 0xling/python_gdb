@@ -6,7 +6,7 @@ from ctypes import *
 libc = cdll.LoadLibrary('libc.so.6')
 
 libc_fork = libc.fork
-libc_execl = libc.execl
+libc_execv = libc.execv
 
 libc_ptrace = libc.ptrace
 libc_ptrace.restype = c_long

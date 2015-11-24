@@ -17,6 +17,7 @@ Constants about the CPU:
 
 try:
     from os import uname
+
     HAS_UNAME = True
 except ImportError:
     HAS_UNAME = False
@@ -28,10 +29,10 @@ CPU_BIGENDIAN = (byteorder == 'big')
 CPU_64BITS = (sizeof(c_void_p) == 8)
 
 if CPU_64BITS:
-    CPU_WORD_SIZE = 8 # bytes
+    CPU_WORD_SIZE = 8  # bytes
     CPU_MAX_UINT = 0xffffffffffffffff
 else:
-    CPU_WORD_SIZE = 4 # bytes
+    CPU_WORD_SIZE = 4  # bytes
     CPU_MAX_UINT = 0xffffffff
 
 if HAS_UNAME:
@@ -39,7 +40,7 @@ if HAS_UNAME:
     _machine = uname()[4]
     CPU_PPC32 = (_machine == 'ppc')
     CPU_PPC64 = (_machine == 'ppc64')
-    CPU_I386 = (_machine in ("i386", "i686"))    # compatible Intel 32 bits
+    CPU_I386 = (_machine in ("i386", "i686"))  # compatible Intel 32 bits
     CPU_X86_64 = (_machine in ("x86_64", "amd64"))  # compatible Intel 64 bits
     CPU_ARM = _machine.startswith('arm')
     del _machine
