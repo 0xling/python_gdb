@@ -43,11 +43,11 @@ def add_file_logger(file, level=logging.DEBUG):
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
+
 from ptrace.debugger.backtrace import getBacktrace
 
-
 add_file_logger('pygdb.log')
-#add_console_logger()
+# add_console_logger()
 
 if not check_support():
     raise Exception('pygdb only support Linux os')
@@ -90,7 +90,7 @@ class pygdb:
         self.trace_exec = True
         self.trace_clone = True
 
-        self.enter_sys_call = False
+        self.pid_dict = {}
 
     #####################################################################################
     # some operation of start/close debug
@@ -98,17 +98,19 @@ class pygdb:
     def load(self, target):
         logger.debug('target=%s' % target)
         args = split_command_line(target)
-        #print args
         command = args[0]
         pid = libc_fork()
         if pid == 0:  # child process
             self._ptrace(PTRACE_TRACEME, 0, 0, 0)
             os.execv(command, args)
         else:  # parent
-            (pid, status) = waitpid(self.pid, 0)
+            # (pid, status) = waitpid(self.pid, 0)
+            (pid, status) = waitpid(0, 0)
             self.pid = pid
+            self.pid_dict[pid] = 0
             logger.debug('pid=%d' % pid)
-            return self.pid
+            # return self.pid
+            return pid
 
     # attach a running process
     def attach(self, pid):
@@ -243,6 +245,7 @@ class pygdb:
     def trace_sys_call(self, enable):
         self.trace_sys_call_flag = enable
 
+    '''
     # True: trace child
     def follow_fork(self, mode):
         self.trace_fork = mode
@@ -253,6 +256,7 @@ class pygdb:
 
     def follow_clone(self, mode):
         self.trace_clone = mode
+    '''
 
     ##########################################################################
     # about the debug event loop
@@ -297,52 +301,50 @@ class pygdb:
         while True:
             self._debug_event_iteration()
 
-    def _event_handle_process_exit(self, status):
+    def _event_handle_process_exit(self, status, pid):
         code = WEXITSTATUS(status)
-        logger.debug('process exited with code:%d' % code)
-        exit(0)
+        logger.debug('process exited with code:%d, pid=%d' % (code, pid))
+        self.pid_dict.pop(pid)
+        if len(self.pid_dict) == 0:
+            exit(0)
 
-    def _event_handle_process_kill(self, status):
+    def _event_handle_process_kill(self, status, pid):
         signum = WTERMSIG(status)
-        logger.debug('process killed by a signal:%d' % signum)
-        exit(0)
+        logger.debug('process killed by a signal:%d, pid=%d' % (signum, pid))
+        self.pid_dict.pop(pid)
+        if len(self.pid_dict) == 0:
+            exit(0)
 
-    def _event_handle_process_unknown_status(self, status):
-        logger.debug('unknown process status:%r' % status)
-        exit(0)
+    def _event_handle_process_unknown_status(self, status, pid):
+        logger.debug('unknown process status:' + hex(status) + ', pid=%d' % pid)
+        self.pid_dict.pop(pid)
+        if len(self.pid_dict) == 0:
+            exit(0)
 
-    def _event_handle_process_ptrace_event(self, status):
+    def _event_handle_process_ptrace_event(self, status, pid):
         event = self.WPTRACEEVENT(status)
-        logger.debug('ptrace event:%d-%s' % (event, event_name(event)))
+        logger.debug('ptrace event:%d-%s, pid=%d' % (event, event_name(event), pid))
 
         if event in self.event_handles.keys():
             self.event_handles[event](self)
 
         if event == PTRACE_EVENT_FORK:
-            new_pid = pid_t()
-            self._ptrace(PTRACE_GETEVENTMSG, self.pid, 0, addressof(new_pid))
-            print 'fork a child child:%d' % new_pid.value
-            if self.trace_fork:
-                self.pid = new_pid.value
-            else:
-                logger.info('fork a child process:%d' % new_pid.value)
-
+            new_pid = self.get_eventmsg(pid)
+            self.pid_dict[new_pid] = 0
+            logger.debug('fork a child child:%d' % new_pid)
         elif event == PTRACE_EVENT_VFORK:
             logger.info('vfork event not support')
         elif event == PTRACE_EVENT_CLONE:
-            new_pid = pid_t()
-            self._ptrace(PTRACE_GETEVENTMSG, self.pid, 0, addressof(new_pid))
-            print 'clone a child child:%d' % new_pid.value
-            if self.trace_clone:
-                self.pid = new_pid.value
-            else:
-                logger.info('clone a chile process:%d' % new_pid)
+            new_pid = self.get_eventmsg(pid)
+            self.pid_dict[new_pid] = 0
+            logger.debug('clone a child child:%d' % new_pid)
         elif event == PTRACE_EVENT_EXEC:
             logger.info('exec event not support')
         elif event == PTRACE_EVENT_VFORK_DONE:
             logger.info('vfork event not support')
         elif event == PTRACE_EVENT_EXIT:
-            pass
+            return False
+        return True
 
     def _event_handle_breakpoint(self):
         signum = 0
@@ -373,7 +375,7 @@ class pygdb:
 
         return signum
 
-    def _event_handle_sys_call(self):
+    def _event_handle_sys_call(self, pid):
         if CPU_64BITS:
             cur_pc = self.regs.rip - 2
             sys_name = SYSCALL_NAMES[self.regs.orig_rax]
@@ -388,13 +390,13 @@ class pygdb:
             arg2 = self.regs.edx
 
         if sys_call_handlers.has_key(sys_name):
-            sys_call_handlers[sys_name](self, cur_pc, sys_name, arg0, arg1, arg2, self.enter_sys_call)
+            sys_call_handlers[sys_name](self, cur_pc, sys_name, arg0, arg1, arg2, self.pid_dict[pid])
         else:
-            default_sys_call_handler(self, cur_pc, sys_name, arg0, arg1, arg2, self.enter_sys_call)
-        if self.enter_sys_call:
-            self.enter_sys_call = False
+            default_sys_call_handler(self, cur_pc, sys_name, arg0, arg1, arg2, self.pid_dict[pid])
+        if self.pid_dict[pid] == 1:
+            self.pid_dict[pid] = 0
         else:
-            self.enter_sys_call = True
+            self.pid_dict[pid] = 1
         return 0
 
     def _event_handle_single_step(self):
@@ -411,7 +413,7 @@ class pygdb:
             self.event_handles[PTRACE_EVENT_SINGLE_STEP](self)
         return 0
 
-    def _event_handle_sigtrap(self):
+    def _event_handle_sigtrap(self, pid):
         logger.debug('handle sigtrap')
         self.regs = self.get_regs()
 
@@ -426,30 +428,33 @@ class pygdb:
                 return self._event_handle_breakpoint()
         return 0
 
-    def _event_handle_process_signal(self, status):
+    def generate_gcore(self, pid):
+        os.popen('gcore -o core.'+str(pid)+' '+str(pid))
+
+
+    def _event_handle_process_signal(self, status, pid):
         signum = WSTOPSIG(status)
-        logger.debug('signum:%d, %s' % (signum, signal_name(signum)))
+        logger.debug('signum:%d-%s, pid=%d' % (signum & 0x7f, signal_name(signum & 0x7f), pid))
 
         self.regs = self.get_regs()
 
         if CPU_64BITS:
-            #print 'rip='+hex(self.regs.rip)
             logger.debug('rip=%08x' % self.regs.rip)
         else:
             logger.debug('eip=%08x' % self.regs.eip)
 
+        if (signum == (0x80 | SIGTRAP)) & self.trace_sys_call_flag:
+            return self._event_handle_sys_call(pid)
+
         if signum == SIGTRAP:
-            return self._event_handle_sigtrap()
-
-
-        if self.trace_sys_call_flag: # status=34175=0x857f why???
-            return self._event_handle_sys_call()
+            return self._event_handle_sigtrap(pid)
 
         if signum in self.callbacks.keys():
             return self.callbacks[signum](self)
 
         if signum == SIGSEGV:
-            self.print_vmmap()
+            #self.print_vmmap()
+            self.generate_gcore(pid)
 
         # ret
         if self.signal_handle_mode.has_key(signum):
@@ -460,38 +465,38 @@ class pygdb:
             return signum
 
     def _debug_event_iteration(self):
-        (pid, status) = waitpid(self.pid, 0)
+        # (pid, status) = waitpid(self.pid, 0)
+        (pid, status) = waitpid(0, 0)
+        self.pid = pid
         signum = 0
 
-        print 'status:%r' %status
-        logger.debug('status:%r' % status)
+        logger.debug('status:' + hex(status) + ' pid:' + str(pid))
 
         # Process exited?
         if WIFEXITED(status):
-            self._event_handle_process_exit(status)
+            self._event_handle_process_exit(status, pid)
 
         # Process killed by a signal?
         elif WIFSIGNALED(status):
-            self._event_handle_process_kill(status)
+            self._event_handle_process_kill(status, pid)
 
         # Invalid process status?
         elif not WIFSTOPPED(status):
-            self._event_handle_process_unknown_status(status)
+            self._event_handle_process_unknown_status(status, pid)
 
         # Ptrace event?
         elif self.WPTRACEEVENT(status):
-            self._event_handle_process_ptrace_event(status)
-
+            self._event_handle_process_ptrace_event(status, pid)
         else:
-            signum = self._event_handle_process_signal(status)
+            signum = self._event_handle_process_signal(status, pid)
 
         # continue
         if self.single_step_flag:
-            self._ptrace(PTRACE_SINGLESTEP, self.pid, 0, signum)
+            self._ptrace(PTRACE_SINGLESTEP, pid, 0, signum)
         elif self.trace_sys_call_flag:
-            self._ptrace(PTRACE_SYSCALL, self.pid, 0, signum)
+            self._ptrace(PTRACE_SYSCALL, pid, 0, signum)
         else:
-            self._ptrace(PTRACE_CONT, self.pid, 0, signum)
+            self._ptrace(PTRACE_CONT, pid, 0, signum)
 
     def WPTRACEEVENT(self, status):
         return status >> 16
@@ -508,14 +513,12 @@ class pygdb:
 
         if libc_ptrace(command, pid, arg1, arg2) == -1:
             logger.debug('ptrace error2:%d' % command)
-            libc_perror()
+            # libc_perror()
 
-    '''
-    def get_eventmsg(self):
+    def get_eventmsg(self, pid):
         new_pid = pid_t()
-        self.ptrace(PTRACE_GETEVENTMSG, self.pid, 0, addressof(new_pid))
+        self._ptrace(PTRACE_GETEVENTMSG, pid, 0, addressof(new_pid))
         return new_pid.value
-    '''
 
     '''
     def getBacktrace(self, max_args=6, max_depth=20):

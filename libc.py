@@ -14,3 +14,4 @@ libc_ptrace.argtypes = [c_int, c_int, c_long, c_long]
 
 libc_errno = libc.errno
 libc_perror = libc.perror
+
