@@ -6,9 +6,11 @@ import socket
 __author__ = 'ling'
 
 from os import waitpid, WIFSTOPPED, WIFEXITED, WIFSIGNALED, WEXITSTATUS, WTERMSIG, WSTOPSIG
+import struct
 import sys
 from zio import *
 from breakpoint import *
+from hard_breakpoint import *
 from linux_struct import *
 from cpuinfo import *
 from libc import *
@@ -26,7 +28,6 @@ logger = logging.getLogger('pygdb')
 logger.setLevel(logging.DEBUG)
 
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
 
 def add_console_logger(level=logging.DEBUG):
     ch = logging.StreamHandler()
@@ -47,7 +48,7 @@ def add_file_logger(file, level=logging.DEBUG):
 from ptrace.debugger.backtrace import getBacktrace
 
 add_file_logger('pygdb.log')
-# add_console_logger()
+#add_console_logger()
 
 if not check_support():
     raise Exception('pygdb only support Linux os')
@@ -75,6 +76,8 @@ class pygdb:
         self.breakpoints = {}  # 所有的断点，以断点地址作为key值。
         self.event_handles = {}  # 对应事件的handler。
         # 共有6个事件，其中主要有EXEC和FORK事件。
+
+        self.hardware_breakpoints = {}
 
         # 这里，还对event_hanles做了扩展，将单步断点等的处理函数也添加到event_handles中，但是在ptrace中并没有单步事件的说法。
         self.regs = None  # 寄存器，每次断下之后，都会读取寄存器放入到self.regs中。
@@ -194,6 +197,21 @@ class pygdb:
     def set_regs(self, regs):
         self._ptrace(PTRACE_SETREGS, self.pid, 0, addressof(regs))
 
+    def get_debug_regs(self, index):
+        dr = c_ulong()
+        if CPU_64BITS:
+            dr = self._ptrace(PTRACE_PEEKUSER, self.pid, 848 + index * 8, 0)
+        else:
+            dr = self._ptrace(PTRACE_PEEKUSER, self.pid, 252 + index * 4, 0)
+
+        return dr
+
+    def set_debug_regs(self, index, value):
+        if CPU_64BITS:
+            self._ptrace(PTRACE_POKEUSER, self.pid, 848 + index * 8, value)
+        else:
+            self._ptrace(PTRACE_POKEUSER, self.pid, 252 + index * 4, value)
+
     ########################################################################
     # about the /proc operation
     # todo
@@ -225,6 +243,83 @@ class pygdb:
         original_byte = self.read(address, 1)
         self.write(address, '\xcc')
         self.breakpoints[address] = breakpoint(address, original_byte, description, restore, handler)
+
+    def _del_hw_by_index(self, index):
+        if not self.hardware_breakpoints.has_key(index):
+            return
+
+        self.set_debug_regs(index, 0)
+
+        dr7 = self.get_debug_regs(7)
+
+        if CPU_64BITS:
+            align = (~((1 << (2 * index)) + (0xf << (16 + index * 4)))) & 0xffffffffffffffff
+        else:
+            align = (~((1 << (2 * index)) + (0xf << (16 + index * 4)))) & 0xffffffff
+
+        dr7 &= align
+
+        self.set_debug_regs(7, dr7)
+
+        self.hardware_breakpoints.pop(index)
+
+    def bp_del_hw(self, address):
+        logger.debug("bp_del_hw(%08x)" % address)
+        for i in range(4):
+            if not self.hardware_breakpoints.has_key(i):
+                continue
+
+            if self.hardware_breakpoints[i].address == address:
+                self._del_hw_by_index(i)
+
+    def bp_set_hw(self, address, length, condition, restore=True, handler=None):
+        logger.debug("bp_set_hw(%08x, %d, %s)" % (address, length, condition))
+
+        if length not in [1, 2, 4]:
+            logger.warn('invalid hw breakpoint length:%d' % length)
+            return
+
+        length -= 1
+
+        if condition not in [HW_ACCESS, HW_EXECUTE, HW_WRITE]:
+            logger.warn('invalid hw breakpoint condition:%d' % condition)
+            return
+
+        if not self.hardware_breakpoints.has_key(0):
+            available = 0
+        elif not self.hardware_breakpoints.has_key(1):
+            available = 1
+        elif not self.hardware_breakpoints.has_key(2):
+            available = 2
+        elif not self.hardware_breakpoints.has_key(3):
+            available = 3
+        else:
+            logger.warn('not hard breakpoint slots avaliable')
+            return
+
+        # instantiate a new hardware breakpoint object for the new bp to create.
+        hw_bp = hardware_breakpoint(address, length, condition, "", restore, handler=handler)
+
+        dr7 = self.get_debug_regs(7)
+
+        # mark available debug register as active (L0 - L3).
+        # set the condition (RW0 - RW3) field for the appropriate slot (bits 16/17, 20/21, 24,25, 28/29)
+        # set the length (LEN0-LEN3) field for the appropriate slot (bits 18/19, 22/23, 26/27, 30/31)
+        self.set_debug_regs(7, dr7 | (1 << (available * 2)) | (condition << ((available * 4) + 16)) | (
+            length << ((available * 4) + 18)))
+
+        # save our breakpoint address to the available hw bp slot.
+        if available == 0:
+            self.set_debug_regs(0, address)
+        elif available == 1:
+            self.set_debug_regs(1, address)
+        elif available == 2:
+            self.set_debug_regs(2, address)
+        elif available == 3:
+            self.set_debug_regs(3, address)
+
+        hw_bp.slot = available
+        self.hardware_breakpoints[available] = hw_bp
 
     #################################################################################
     def set_signal_handle_mode(self, signum, ignore=True):
@@ -373,6 +468,8 @@ class pygdb:
         else:
             self.breakpoints[bp_addr] = None
 
+        if signum is None:
+            signum = 0
         return signum
 
     def _event_handle_sys_call(self, pid):
@@ -413,12 +510,44 @@ class pygdb:
             self.event_handles[PTRACE_EVENT_SINGLE_STEP](self)
         return 0
 
-    def _event_handle_sigtrap(self, pid):
+    def _event_handle_sigtrap(self, pid, is_sys_call=False):
         logger.debug('handle sigtrap')
         self.regs = self.get_regs()
 
-        if self.single_step_flag:
-            return self._event_handle_single_step()
+        if is_sys_call:
+            return self._event_handle_sys_call(pid)
+
+        dr6 = self.get_debug_regs(6)
+
+        # if self.single_step_flag:
+        if (dr6 & 0x4000) == 0x4000:  # check the bs bit
+            signum = self._event_handle_single_step()
+            self.set_debug_regs(6, 0)
+            return signum
+
+        self.hardware_breakpoint_hit = None
+        if (dr6 & 0x1) and self.hardware_breakpoints.has_key(0):
+            self.hardware_breakpoint_hit = self.hardware_breakpoints[0]
+
+        elif (dr6 & 0x2) and self.hardware_breakpoints.has_key(1):
+            self.hardware_breakpoint_hit = self.hardware_breakpoints[1]
+
+        elif (dr6 & 0x4) and self.hardware_breakpoints.has_key(2):
+            self.hardware_breakpoint_hit = self.hardware_breakpoints[2]
+
+        elif (dr6 & 0x8) and self.hardware_breakpoints.has_key(3):
+            self.hardware_breakpoint_hit = self.hardware_breakpoints[3]
+
+        # if we are dealing with a hardware breakpoint and there is a specific handler registered, pass control to it.
+        if self.hardware_breakpoint_hit and self.hardware_breakpoint_hit.handler:
+            signum = self.hardware_breakpoint_hit.handler(self)
+
+            if not self.hardware_breakpoint_hit.restore:
+                self.bp_del_hw(self.hardware_breakpoint_hit.address)
+
+            self.set_debug_regs(6, 0)
+
+            return signum
 
         if CPU_64BITS:
             if (self.regs.rip - 1) in self.breakpoints.keys():
@@ -429,31 +558,38 @@ class pygdb:
         return 0
 
     def generate_gcore(self, pid):
-        os.popen('gcore -o core.'+str(pid)+' '+str(pid))
-
+        os.popen('gcore -o core.' + str(pid) + ' ' + str(pid))
 
     def _event_handle_process_signal(self, status, pid):
         signum = WSTOPSIG(status)
         logger.debug('signum:%d-%s, pid=%d' % (signum & 0x7f, signal_name(signum & 0x7f), pid))
+        dr6 = self.get_debug_regs(6)
+        logger.debug('dr6=' + hex(dr6))
+        dr7 = self.get_debug_regs(7)
+        logger.debug('dr7=' + hex(dr7))
 
         self.regs = self.get_regs()
+
+        dr6 = self.get_debug_regs(6)
+        dr7 = self.get_debug_regs(7)
 
         if CPU_64BITS:
             logger.debug('rip=%08x' % self.regs.rip)
         else:
             logger.debug('eip=%08x' % self.regs.eip)
 
-        if (signum == (0x80 | SIGTRAP)) & self.trace_sys_call_flag:
-            return self._event_handle_sys_call(pid)
-
         if signum == SIGTRAP:
-            return self._event_handle_sigtrap(pid)
+            if (0x80 | signum) == 0x80:
+                is_sys_call = True
+            else:
+                is_sys_call = False
+            return self._event_handle_sigtrap(pid, is_sys_call)
 
         if signum in self.callbacks.keys():
             return self.callbacks[signum](self)
 
         if signum == SIGSEGV:
-            #self.print_vmmap()
+            # self.print_vmmap()
             self.generate_gcore(pid)
 
         # ret
@@ -461,8 +597,7 @@ class pygdb:
             ignore = self.signal_handle_mode[signum]
             if ignore:
                 return 0
-        else:
-            return signum
+        return signum
 
     def _debug_event_iteration(self):
         # (pid, status) = waitpid(self.pid, 0)
@@ -491,6 +626,8 @@ class pygdb:
             signum = self._event_handle_process_signal(status, pid)
 
         # continue
+        if signum is None:
+            signum = 0
         if self.single_step_flag:
             self._ptrace(PTRACE_SINGLESTEP, pid, 0, signum)
         elif self.trace_sys_call_flag:
@@ -503,7 +640,7 @@ class pygdb:
 
     #################################################################
     def _ptrace(self, command, pid, arg1, arg2):
-        # logger.debug('ptrace command=%d' % command)
+        logger.debug('ptrace command=%s' % ptrace_cmd_name(command))
         peek_commands = [PTRACE_PEEKDATA, PTRACE_PEEKSIGINFO, PTRACE_PEEKTEXT, PTRACE_PEEKUSER]
         if command in peek_commands:
             data = libc_ptrace(command, pid, arg1, arg2)
@@ -598,4 +735,5 @@ class pygdb:
 
     def ptrace_setfpxregs(self, pid, fpxregs):
         self.ptrace(PTRACE_SETFPXREGS, pid, 0, addressof(fpxregs))
-    '''
+
+'''
