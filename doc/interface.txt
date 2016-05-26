@@ -41,6 +41,6 @@ class pygdb:
     # 跟踪exec子进程
     follow_exec(self, mode):
 
-    # 运行调试器
+    # 运行调试器,直到跟踪进程退出
     run(self):
 

@@ -5,7 +5,7 @@ import socket
 
 __author__ = 'ling'
 
-from os import waitpid, WIFSTOPPED, WIFEXITED, WIFSIGNALED, WEXITSTATUS, WTERMSIG, WSTOPSIG
+from os import waitpid, WIFSTOPPED, WIFEXITED, WIFSIGNALED, WEXITSTATUS, WTERMSIG, WSTOPSIG, O_CREAT, O_TRUNC, O_RDONLY, O_WRONLY
 import struct
 import sys
 from zio import *
@@ -29,6 +29,7 @@ logger.setLevel(logging.DEBUG)
 
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
+
 def add_console_logger(level=logging.DEBUG):
     ch = logging.StreamHandler()
     ch.setLevel(level)
@@ -45,10 +46,10 @@ def add_file_logger(file, level=logging.DEBUG):
     logger.addHandler(fh)
 
 
-from ptrace.debugger.backtrace import getBacktrace
+#from ptrace.debugger.backtrace import getBacktrace
 
 add_file_logger('pygdb.log')
-#add_console_logger()
+# add_console_logger()
 
 if not check_support():
     raise Exception('pygdb only support Linux os')
@@ -95,17 +96,37 @@ class pygdb:
 
         self.pid_dict = {}
 
+        self.process_exist = False
+
     #####################################################################################
     # some operation of start/close debug
     # load a pe file
     def load(self, target):
         logger.debug('target=%s' % target)
         args = split_command_line(target)
-        command = args[0]
         pid = libc_fork()
         if pid == 0:  # child process
             self._ptrace(PTRACE_TRACEME, 0, 0, 0)
-            os.execv(command, args)
+            infile = None
+            outfile = None
+            real_args = []
+            for arg in args:
+                if arg.startswith('<'):
+                    infile = arg[1:]
+                elif arg.startswith('>'):
+                    outfile = arg[1:]
+                else:
+                    real_args.append(arg)
+            if infile is not None:
+                os.close(0)
+                f = os.open(infile, O_RDONLY)
+                os.dup2(f, 0)
+            if outfile is not None:
+                os.close(1)
+                f = os.open(outfile, O_WRONLY | O_CREAT | O_TRUNC, 0666)
+                os.dup2(f, 1)
+            command = real_args[0]
+            os.execv(command, real_args)
         else:  # parent
             # (pid, status) = waitpid(self.pid, 0)
             (pid, status) = waitpid(0, 0)
@@ -131,6 +152,12 @@ class pygdb:
     def kill(self):
         logger.debug('killed')
         self._ptrace(PTRACE_KILL, self.pid, 0, 0)
+
+    def killall(self):
+        logger.debug('all killed')
+        for key,value in self.pid_dict.items():
+            self._ptrace(PTRACE_KILL, key, 0, 0)
+
 
     #################################################################################
     # about the stdout
@@ -207,6 +234,7 @@ class pygdb:
         return dr
 
     def set_debug_regs(self, index, value):
+        #print 'index=%d, value=%08x' %(index, value)
         if CPU_64BITS:
             self._ptrace(PTRACE_POKEUSER, self.pid, 848 + index * 8, value)
         else:
@@ -308,6 +336,12 @@ class pygdb:
         self.set_debug_regs(7, dr7 | (1 << (available * 2)) | (condition << ((available * 4) + 16)) | (
             length << ((available * 4) + 18)))
 
+        # set dr7 will clear dr0-dr3, why???
+
+        hw_bp.slot = available
+        self.hardware_breakpoints[available] = hw_bp
+
+        '''
         # save our breakpoint address to the available hw bp slot.
         if available == 0:
             self.set_debug_regs(0, address)
@@ -317,9 +351,11 @@ class pygdb:
             self.set_debug_regs(2, address)
         elif available == 3:
             self.set_debug_regs(3, address)
+        '''
 
-        hw_bp.slot = available
-        self.hardware_breakpoints[available] = hw_bp
+        for key in self.hardware_breakpoints.keys():
+            self.set_debug_regs(key, self.hardware_breakpoints[key].address)
+
 
     #################################################################################
     def set_signal_handle_mode(self, signum, ignore=True):
@@ -377,16 +413,17 @@ class pygdb:
                     self.callbacks[signum](self)
     '''
 
-    def run(self):
-        options = PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_TRACECLONE | \
-                  PTRACE_O_TRACEEXEC | PTRACE_O_TRACEVFORKDONE | PTRACE_O_TRACEEXIT
+    def run(self, options=None):
+        if options is None:
+            options = PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | \
+                      PTRACE_O_TRACEEXEC | PTRACE_O_TRACEVFORKDONE | PTRACE_O_TRACEEXIT
 
         self.set_options(self.pid, options)
         self._debug_event_loop()
 
     def _debug_event_loop(self):
         # continue
-        if self.single_step_flag:
+        if self.single_step_flag | (self._restore_breakpoint is not None):
             self._ptrace(PTRACE_SINGLESTEP, self.pid, 0, 0)
         elif self.trace_sys_call_flag:
             self._ptrace(PTRACE_SYSCALL, self.pid, 0, 0)
@@ -395,26 +432,28 @@ class pygdb:
 
         while True:
             self._debug_event_iteration()
+            if self.process_exist:
+                break
 
     def _event_handle_process_exit(self, status, pid):
         code = WEXITSTATUS(status)
         logger.debug('process exited with code:%d, pid=%d' % (code, pid))
         self.pid_dict.pop(pid)
         if len(self.pid_dict) == 0:
-            exit(0)
+            self.process_exist = True
 
     def _event_handle_process_kill(self, status, pid):
         signum = WTERMSIG(status)
         logger.debug('process killed by a signal:%d, pid=%d' % (signum, pid))
         self.pid_dict.pop(pid)
         if len(self.pid_dict) == 0:
-            exit(0)
+            self.process_exist = True
 
     def _event_handle_process_unknown_status(self, status, pid):
         logger.debug('unknown process status:' + hex(status) + ', pid=%d' % pid)
         self.pid_dict.pop(pid)
         if len(self.pid_dict) == 0:
-            exit(0)
+            self.process_exist = True
 
     def _event_handle_process_ptrace_event(self, status, pid):
         event = self.WPTRACEEVENT(status)
@@ -463,7 +502,6 @@ class pygdb:
             signum = self.breakpoints[bp_addr].handler(self)
 
         if self.breakpoints[bp_addr].restore:
-            self.single_step(True)
             self._restore_breakpoint = self.breakpoints[bp_addr]
         else:
             self.breakpoints[bp_addr] = None
@@ -497,17 +535,22 @@ class pygdb:
         return 0
 
     def _event_handle_single_step(self):
-        self.single_step_flag = False
         logger.debug('handle single step')
         if self._restore_breakpoint is not None:
             # restore breakpoint
+            logger.debug('restore breakpoint')
             bp = self._restore_breakpoint
             self.bp_set(bp.address, bp.description, bp.restore, bp.handler)
             self._restore_breakpoint = None
 
-        elif (PTRACE_EVENT_SINGLE_STEP in self.event_handles.keys()) & \
-                (self.event_handles[PTRACE_EVENT_SINGLE_STEP] is not None):
-            self.event_handles[PTRACE_EVENT_SINGLE_STEP](self)
+        elif (PTRACE_EVENT_SINGLE_STEP in self.event_handles.keys()): 
+            logger.debug("event_handles has PTRACE_EVENT_SINGLE_STEP")
+            if self.event_handles[PTRACE_EVENT_SINGLE_STEP] is not None:
+                logger.debug('call single callback')
+                self.event_handles[PTRACE_EVENT_SINGLE_STEP](self)
+        else:
+            logger.debug('a single step error in process')
+            return SIGTRAP #单步异常是由程序自己产生的
         return 0
 
     def _event_handle_sigtrap(self, pid, is_sys_call=False):
@@ -518,6 +561,7 @@ class pygdb:
             return self._event_handle_sys_call(pid)
 
         dr6 = self.get_debug_regs(6)
+        logger.debug('dr6=%08x' % dr6)
 
         # if self.single_step_flag:
         if (dr6 & 0x4000) == 0x4000:  # check the bs bit
@@ -588,14 +632,13 @@ class pygdb:
         if signum in self.callbacks.keys():
             return self.callbacks[signum](self)
 
-        if signum == SIGSEGV:
-            # self.print_vmmap()
-            self.generate_gcore(pid)
-
         # ret
         if self.signal_handle_mode.has_key(signum):
             ignore = self.signal_handle_mode[signum]
             if ignore:
+                if signum == SIGSEGV:
+                    # self.print_vmmap()
+                    self.generate_gcore(pid)
                 return 0
         return signum
 
@@ -604,9 +647,7 @@ class pygdb:
         (pid, status) = waitpid(0, 0)
         self.pid = pid
         signum = 0
-
         logger.debug('status:' + hex(status) + ' pid:' + str(pid))
-
         # Process exited?
         if WIFEXITED(status):
             self._event_handle_process_exit(status, pid)
@@ -628,7 +669,7 @@ class pygdb:
         # continue
         if signum is None:
             signum = 0
-        if self.single_step_flag:
+        if self.single_step_flag | (self._restore_breakpoint is not None):
             self._ptrace(PTRACE_SINGLESTEP, pid, 0, signum)
         elif self.trace_sys_call_flag:
             self._ptrace(PTRACE_SYSCALL, pid, 0, signum)

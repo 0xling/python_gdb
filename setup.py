@@ -5,7 +5,7 @@ from setuptools import find_packages
 
 setup(
       name="python_gdb",
-      version="0.3",
+      version="0.5",
       description="a cure linux debugger",
       author="Ling",
       author_email='ling_pro@163.com',
